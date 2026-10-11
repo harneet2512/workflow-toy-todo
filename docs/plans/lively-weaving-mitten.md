@@ -57,8 +57,8 @@ Small path from `feature-loop`: stage 2 `behavioral-envelope` only, then `wp-loo
 ## Verification
 
 - `npm test` (unit then e2e) must pass; CI runs the same.
-- AT1 to AT5: each is an e2e test whose name starts with its id (`AT1: ...`), run by `npm run test:e2e`. AT3 and AT4 include the boundary pair 200 / 201 (including a multi-code-point emoji title, 200 emoji accepted and 201 refused), and AT4 asserts via GET that the title and `done` are unchanged after a rejected PATCH that also sent `done: true`. AT5 covers a `done`-only PATCH, an unknown id with a valid and an invalid title, and the existing cross-tenant read.
-- Unit tests: trim, tabs, newlines and NBSP trimmed, blank gives `title is required`, non-string (null, number, array, object, undefined) gives `title is required`, 200 ok, 201 refused, code-point counting, input not mutated.
+- AT1 to AT5: each is an e2e test whose name starts with its id (`AT1: ...`), run by `npm run test:e2e`. AT3 and AT4 include the boundary pair 200 / 201 (plus the same pair with a single-code-point astral emoji such as U+1F600, 200 accepted and 201 refused, where each emoji is 2 UTF-16 units but 1 code point), and AT4 asserts via GET that the title and `done` are unchanged after a rejected PATCH that also sent `done: true`. AT5 covers a `done`-only PATCH, an unknown id with a valid and an invalid title, and the existing cross-tenant read.
+- Unit tests: trim, tabs, newlines and NBSP trimmed, blank gives `title is required`, non-string (null, number, array, object, undefined) gives `title is required`, 200 ok, 201 refused, code-point counting (200 single-code-point emoji ok, 201 refused; a multi-code-point sequence such as a skin-tone emoji, 2 code points, is counted by its real total: 100 of them ok, 101 refused), input not mutated.
 - Live-verify scenario `todo-title-rules-happy-path` (above) against the real server process.
 
 ## Failure modes
@@ -71,7 +71,7 @@ Small path from `feature-loop`: stage 2 `behavioral-envelope` only, then `wp-loo
 
 ## Time box
 
-none. If time runs short, cut in this order: the README line, then the emoji boundary test, then the extra unit cases. Never cut AT1 to AT5.
+none. If time runs short, cut in this order: the README line, then the emoji boundary tests, then the extra unit cases. Never cut AT1 to AT5.
 
 ## Concerns
 
@@ -83,7 +83,9 @@ none. If time runs short, cut in this order: the README line, then the emoji bou
 
 ## Design challenge
 
-pending: codex plan review
+Report: `.scratch/review/codex-plan-todo-title-rules.json` (gpt-6-astra, codex-cli 0.162.1, plan subject 5043d34): 1 CONFIRMED, 0 PLAUSIBLE. Resolutions: `.scratch/review/codex-plan-todo-title-rules.resolutions.md`.
+
+- P1 (MEDIUM, CONFIRMED): the Verification section required "200 multi-code-point emoji accepted", which contradicts the code-point rule (a skin-tone emoji is 2 code points, so 200 of them is 400 code points and is correctly refused). Resolved: the 200/201 boundary test now uses a single-code-point astral emoji (U+1F600), and multi-code-point sequences are tested against their real totals (100 skin-tone emoji ok, 101 refused). The rule itself is unchanged (owner decision Q2).
 
 ## Open questions
 
