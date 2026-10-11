@@ -1,5 +1,6 @@
 // HTTP handler. Every request needs an `x-api-key` header; the key is the tenant.
 import { createTodo, deleteTodo, getTodo, listTodos, updateTodo } from './store.mjs';
+import { normalizeTitle } from './title.mjs';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -32,8 +33,9 @@ async function route(req, res, tenant) {
   if (!id && req.method === 'GET') return send(res, 200, { todos: listTodos(tenant) });
   if (!id && req.method === 'POST') {
     const body = await readJson(req);
-    if (typeof body.title !== 'string' || body.title.trim() === '') return send(res, 400, { error: 'title is required' });
-    return send(res, 201, createTodo(tenant, { title: body.title }));
+    const checked = normalizeTitle(body.title);
+    if (checked.error) return send(res, 400, { error: checked.error });
+    return send(res, 201, createTodo(tenant, { title: checked.title }));
   }
   if (id && req.method === 'GET') {
     const todo = getTodo(tenant, id);
@@ -41,8 +43,13 @@ async function route(req, res, tenant) {
   }
   if (id && req.method === 'PATCH') {
     const body = await readJson(req);
+    // Validate first: a refused title must not apply `done` or reach the lookup.
     const patch = {};
-    if (body.title !== undefined) patch.title = body.title;
+    if (body.title !== undefined) {
+      const checked = normalizeTitle(body.title);
+      if (checked.error) return send(res, 400, { error: checked.error });
+      patch.title = checked.title;
+    }
     if (body.done !== undefined) patch.done = Boolean(body.done);
     const todo = updateTodo(tenant, id, patch);
     return todo ? send(res, 200, todo) : send(res, 404, { error: 'not found' });

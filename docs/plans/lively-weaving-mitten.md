@@ -93,4 +93,5 @@ n/a: grilling finished inside the cap (1 round); every question was answered.
 
 ## Changes
 
-none yet: appended during the build.
+- Changed: e2e adds a cross-tenant PATCH case (intruder PATCHes the owner's todo with a valid title: 404, with an invalid title: 400; the owner's todo is unchanged) and PATCH cases `{title: null|42|[]|{}, done: true}` that must leave `done` false, because the envelope second pass (ID-01, CORE-04) required them as proof; the plan's AT5 and AT4 only named the simpler cases.
+- Changed: e2e also asserts markup in a title (`<script>`, quotes) is stored and returned as plain text, because envelope API-02 names injection-shaped titles as a proof case.
