@@ -1,0 +1,14 @@
+{
+  "name": "todo-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A small multi-tenant todo HTTP API used to exercise the feature workflow",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test:unit": "node --test \"test/*.test.mjs\"",
+    "test:e2e": "node --test \"e2e/*.test.mjs\"",
+    "test": "npm run test:unit && npm run test:e2e"
+  }
+}
