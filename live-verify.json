@@ -1,0 +1,7 @@
+{
+  "start": ["node", "src/server.mjs"],
+  "healthz": null,
+  "ready": "todo-api listening on",
+  "db": false,
+  "env": { "PORT": "{{port}}" }
+}
