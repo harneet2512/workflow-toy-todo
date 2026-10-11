@@ -1,6 +1,6 @@
 // HTTP handler. Every request needs an `x-api-key` header; the key is the tenant.
 import { createTodo, deleteTodo, getTodo, listTodos, updateTodo } from './store.mjs';
-import { normalizeDueDate } from './dueDate.mjs';
+import { normalizeDueDate, overdueTodos, parseOverdue } from './dueDate.mjs';
 import { normalizeTitle } from './title.mjs';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -31,7 +31,13 @@ async function route(req, res, tenant) {
   const match = url.pathname.match(/^\/todos(?:\/([^/]+))?$/);
   if (!match) return send(res, 404, { error: 'not found' });
   const id = match[1];
-  if (!id && req.method === 'GET') return send(res, 200, { todos: listTodos(tenant) });
+  if (!id && req.method === 'GET') {
+    const filter = parseOverdue(url.searchParams.getAll('overdue'));
+    if (filter.error) return send(res, 400, { error: filter.error });
+    // The filter runs on the caller's own bucket only; overdueTodos reads the clock once for the whole list.
+    const todos = listTodos(tenant);
+    return send(res, 200, { todos: filter.overdue ? overdueTodos(todos) : todos });
+  }
   if (!id && req.method === 'POST') {
     const body = await readJson(req);
     const checked = normalizeTitle(body.title);

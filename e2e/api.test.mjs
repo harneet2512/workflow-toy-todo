@@ -338,3 +338,99 @@ test('due dates AT5: another tenant cannot read, set or clear the dueDate of a t
   assert.deepEqual(await listAll(intruder), []);
   assert.equal((await fetchTodo('dd-owner', todo.id)).dueDate, '2026-12-31');
 });
+
+// ---- overdue filter (T2). Dates come from the real UTC clock when the test runs; no clock override exists. ----
+
+const OVERDUE_BAD = { error: 'overdue must be true or false' };
+const utcDay = (offsetDays) => new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+const overdueIds = async (key, query = '?overdue=true') =>
+  (await (await call('GET', `/todos${query}`, { key })).json()).todos.map((t) => t.id);
+
+test('due dates AT4: overdue lists only my not-done todos due before today UTC, in creation order', async () => {
+  const key = 'dd-at4-main';
+  const [yesterday, today, tomorrow] = [utcDay(-1), utcDay(0), utcDay(1)];
+  const mk = async (body) => (await (await createDated(key, body)).json());
+  const ancient = await mk({ title: 'ancient', dueDate: '2000-01-01' });
+  const late = await mk({ title: 'late', dueDate: yesterday });
+  const dueToday = await mk({ title: 'today', dueDate: today });
+  await mk({ title: 'tomorrow', dueDate: tomorrow });
+  await mk({ title: 'far future', dueDate: '9999-12-31' });
+  await mk({ title: 'undated' });
+  const doneLate = await mk({ title: 'late but done', dueDate: yesterday });
+  await call('PATCH', `/todos/${doneLate.id}`, { key, body: { done: true } });
+
+  const res = await call('GET', '/todos?overdue=true', { key });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(Object.keys(body), ['todos']);
+  assert.deepEqual(body.todos.map((t) => t.title), ['ancient', 'late'], 'creation order, only the overdue ones');
+  assert.deepEqual(body.todos.map((t) => t.id), [ancient.id, late.id]);
+  assert.equal(body.todos[1].dueDate, yesterday, 'listed todos keep their date');
+  assert.ok(!body.todos.map((t) => t.id).includes(dueToday.id), 'due today is not overdue');
+});
+
+test('due dates AT4: without the parameter, or with overdue=false, every todo is listed', async () => {
+  const key = 'dd-at4-all';
+  await createDated(key, { title: 'late', dueDate: utcDay(-1) });
+  await createDated(key, { title: 'undated' });
+  await createDated(key, { title: 'future', dueDate: utcDay(1) });
+  for (const query of ['', '?overdue=false', '?other=1', '?overdue=false&other=1']) {
+    const res = await call('GET', `/todos${query}`, { key });
+    assert.equal(res.status, 200, query);
+    assert.deepEqual((await res.json()).todos.map((t) => t.title), ['late', 'undated', 'future'], query);
+  }
+});
+
+test('due dates AT4: any other overdue value, or a repeated one, is a 400 with the exact body', async () => {
+  const key = 'dd-at4-bad';
+  await createDated(key, { title: 'late', dueDate: utcDay(-1) });
+  const queries = [
+    '?overdue=yes', '?overdue=1', '?overdue=0', '?overdue=TRUE', '?overdue=True', '?overdue=FALSE', '?overdue=',
+    '?overdue', '?overdue=%20true', '?overdue=true%0A', '?overdue=true&overdue=false', '?overdue=false&overdue=true',
+    '?overdue=true&overdue=true',
+  ];
+  for (const query of queries) {
+    const res = await call('GET', `/todos${query}`, { key });
+    assert.equal(res.status, 400, query);
+    assert.deepEqual(await res.json(), OVERDUE_BAD, query);
+  }
+  assert.equal((await call('GET', '/todos?overdue=true&unrelated=x', { key })).status, 200, 'unrelated parameters stay ignored');
+});
+
+test('due dates AT4: another tenant never sees my overdue todos, and I never see theirs', async () => {
+  const mine = await (await createDated('dd-at4-a', { title: 'mine', dueDate: utcDay(-3) })).json();
+  const theirs = await (await createDated('dd-at4-b', { title: 'theirs', dueDate: utcDay(-3) })).json();
+  assert.deepEqual(await overdueIds('dd-at4-a'), [mine.id]);
+  assert.deepEqual(await overdueIds('dd-at4-b'), [theirs.id]);
+  assert.deepEqual(await overdueIds('dd-at4-nobody'), []);
+  assert.equal((await fetch(base + '/todos?overdue=true')).status, 401);
+});
+
+test('due dates AT4: marking done, clearing the date or moving it forward takes a todo off the overdue list', async () => {
+  const key = 'dd-at4-life';
+  const a = await (await createDated(key, { title: 'a', dueDate: utcDay(-2) })).json();
+  const b = await (await createDated(key, { title: 'b', dueDate: utcDay(-2) })).json();
+  const c = await (await createDated(key, { title: 'c', dueDate: utcDay(-2) })).json();
+  assert.deepEqual(await overdueIds(key), [a.id, b.id, c.id]);
+
+  await call('PATCH', `/todos/${a.id}`, { key, body: { done: true } });
+  assert.deepEqual(await overdueIds(key), [b.id, c.id]);
+  await call('PATCH', `/todos/${b.id}`, { key, body: { dueDate: null } });
+  assert.deepEqual(await overdueIds(key), [c.id]);
+  await call('PATCH', `/todos/${c.id}`, { key, body: { dueDate: utcDay(0) } });
+  assert.deepEqual(await overdueIds(key), [], 'moved to today');
+  await call('PATCH', `/todos/${a.id}`, { key, body: { done: false } });
+  assert.deepEqual(await overdueIds(key), [a.id], 'reopened and still late');
+  await call('PATCH', `/todos/${c.id}`, { key, body: { dueDate: '2000-01-01' } });
+  assert.deepEqual(await overdueIds(key), [a.id, c.id], 'back in creation order');
+});
+
+test('due dates AT4: the overdue parameter is ignored on a single todo and on create', async () => {
+  const key = 'dd-at4-ignored';
+  const todo = await (await createDated(key, { title: 'late', dueDate: utcDay(-1) })).json();
+  const one = await call('GET', `/todos/${todo.id}?overdue=yes`, { key });
+  assert.equal(one.status, 200);
+  assert.equal((await one.json()).id, todo.id);
+  const made = await call('POST', '/todos?overdue=yes', { key, body: { title: 'x' } });
+  assert.equal(made.status, 201);
+});
