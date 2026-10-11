@@ -1,5 +1,6 @@
 // HTTP handler. Every request needs an `x-api-key` header; the key is the tenant.
 import { createTodo, deleteTodo, getTodo, listTodos, updateTodo } from './store.mjs';
+import { normalizeDueDate } from './dueDate.mjs';
 import { normalizeTitle } from './title.mjs';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -35,7 +36,13 @@ async function route(req, res, tenant) {
     const body = await readJson(req);
     const checked = normalizeTitle(body.title);
     if (checked.error) return send(res, 400, { error: checked.error });
-    return send(res, 201, createTodo(tenant, { title: checked.title }));
+    let dueDate = null;
+    if (body.dueDate !== undefined) {
+      const date = normalizeDueDate(body.dueDate);
+      if (date.error) return send(res, 400, { error: date.error });
+      dueDate = date.dueDate;
+    }
+    return send(res, 201, createTodo(tenant, { title: checked.title, dueDate }));
   }
   if (id && req.method === 'GET') {
     const todo = getTodo(tenant, id);
@@ -49,6 +56,12 @@ async function route(req, res, tenant) {
       const checked = normalizeTitle(body.title);
       if (checked.error) return send(res, 400, { error: checked.error });
       patch.title = checked.title;
+    }
+    // The date check comes after the title check and before the lookup and the write; no await below.
+    if (body.dueDate !== undefined) {
+      const date = normalizeDueDate(body.dueDate);
+      if (date.error) return send(res, 400, { error: date.error });
+      patch.dueDate = date.dueDate; // null clears the date
     }
     if (body.done !== undefined) patch.done = Boolean(body.done);
     const todo = updateTodo(tenant, id, patch);

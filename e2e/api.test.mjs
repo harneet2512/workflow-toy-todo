@@ -192,3 +192,149 @@ test('AT5: markup in a title is stored as plain text', async () => {
   assert.equal(todo.title, title);
   assert.equal((await fetchTodo(key, todo.id)).title, title);
 });
+
+// ---- Due dates (docs/acceptance/todo-due-dates.md) ----------------------------------------
+// Each test uses its own tenant key (prefix `dd-`) so tests do not see each other's todos.
+const BAD_DATE = { error: 'dueDate must be a valid date in YYYY-MM-DD format' };
+const BAD_DATES = [
+  '2026-02-30', '2026-13-01', '2026-10-11T00:00:00Z', '11/10/2026', ' 2026-10-11', '2026-10-11\n',
+  '', 42, true, [], {}, ['2026-10-11'],
+];
+const createDated = async (key, body) => call('POST', '/todos', { key, body });
+
+test('due dates AT1: a todo created with a dueDate returns it, fetch and list show it', async () => {
+  const key = 'dd-at1';
+  const res = await createDated(key, { title: 'ship', dueDate: '2026-12-31' });
+  assert.equal(res.status, 201);
+  const created = await res.json();
+  assert.equal(created.dueDate, '2026-12-31');
+  assert.equal((await fetchTodo(key, created.id)).dueDate, '2026-12-31');
+  assert.deepEqual((await listAll(key)).map((t) => t.dueDate), ['2026-12-31']);
+});
+
+test('due dates AT1: a todo created without a date, or with null, has no dueDate field', async () => {
+  const key = 'dd-at1b';
+  const plain = await (await createDated(key, { title: 'plain' })).json();
+  const nulled = await (await createDated(key, { title: 'nulled', dueDate: null })).json();
+  assert.equal('dueDate' in plain, false);
+  assert.equal('dueDate' in nulled, false);
+  assert.deepEqual(Object.keys(plain).sort(), ['createdAt', 'done', 'id', 'title']);
+  assert.equal('dueDate' in (await fetchTodo(key, nulled.id)), false);
+  for (const t of await listAll(key)) assert.equal('dueDate' in t, false);
+});
+
+test('due dates AT1: a date in the past is accepted', async () => {
+  const res = await createDated('dd-at1c', { title: 'late', dueDate: '2000-01-01' });
+  assert.equal(res.status, 201);
+  assert.equal((await res.json()).dueDate, '2000-01-01');
+});
+
+test('due dates AT2: update sets, replaces and clears the date; other updates keep it', async () => {
+  const key = 'dd-at2';
+  const todo = await create(key, 'task');
+  assert.equal('dueDate' in todo, false);
+
+  const set = await call('PATCH', `/todos/${todo.id}`, { key, body: { dueDate: '2026-12-31' } });
+  assert.equal(set.status, 200);
+  assert.equal((await set.json()).dueDate, '2026-12-31');
+
+  const replaced = await call('PATCH', `/todos/${todo.id}`, { key, body: { dueDate: '2027-01-15' } });
+  assert.equal((await replaced.json()).dueDate, '2027-01-15');
+  assert.equal((await fetchTodo(key, todo.id)).dueDate, '2027-01-15');
+
+  const doneOnly = await (await call('PATCH', `/todos/${todo.id}`, { key, body: { done: true } })).json();
+  assert.equal(doneOnly.dueDate, '2027-01-15');
+  assert.equal(doneOnly.done, true);
+  const titleOnly = await (await call('PATCH', `/todos/${todo.id}`, { key, body: { title: 'renamed' } })).json();
+  assert.equal(titleOnly.dueDate, '2027-01-15');
+  const empty = await (await call('PATCH', `/todos/${todo.id}`, { key, body: {} })).json();
+  assert.equal(empty.dueDate, '2027-01-15');
+
+  const cleared = await call('PATCH', `/todos/${todo.id}`, { key, body: { dueDate: null } });
+  assert.equal(cleared.status, 200);
+  const clearedBody = await cleared.json();
+  assert.equal('dueDate' in clearedBody, false);
+  assert.equal(clearedBody.title, 'renamed');
+  assert.equal(clearedBody.done, true);
+  assert.equal('dueDate' in (await fetchTodo(key, todo.id)), false);
+});
+
+test('due dates AT2: clearing the date of a todo that never had one is a no-op', async () => {
+  const key = 'dd-at2b';
+  const todo = await create(key, 'never dated');
+  const res = await call('PATCH', `/todos/${todo.id}`, { key, body: { dueDate: null } });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal('dueDate' in body, false);
+  assert.equal(body.title, 'never dated');
+  assert.equal(body.done, false);
+});
+
+test('due dates AT3: a bad dueDate is refused on create and nothing is added', async () => {
+  const key = 'dd-at3';
+  for (const dueDate of BAD_DATES) {
+    const res = await createDated(key, { title: 'x', dueDate });
+    assert.equal(res.status, 400, JSON.stringify(dueDate));
+    assert.deepEqual(await res.json(), BAD_DATE, JSON.stringify(dueDate));
+  }
+  assert.deepEqual(await listAll(key), []);
+});
+
+test('due dates AT3: a bad dueDate is refused on update and the todo is unchanged, even with a good title and done', async () => {
+  const key = 'dd-at3b';
+  const todo = await (await createDated(key, { title: 'keep me', dueDate: '2026-12-31' })).json();
+  for (const dueDate of BAD_DATES) {
+    const res = await call('PATCH', `/todos/${todo.id}`, { key, body: { dueDate, title: 'changed', done: true } });
+    assert.equal(res.status, 400, JSON.stringify(dueDate));
+    assert.deepEqual(await res.json(), BAD_DATE, JSON.stringify(dueDate));
+    const after = await fetchTodo(key, todo.id);
+    assert.equal(after.title, 'keep me');
+    assert.equal(after.done, false);
+    assert.equal(after.dueDate, '2026-12-31');
+  }
+});
+
+test('due dates AT3: error order: title error wins; bad date on an unknown id is 400, good date is 404', async () => {
+  const key = 'dd-at3c';
+  const todo = await create(key, 'task');
+  const both = await call('PATCH', `/todos/${todo.id}`, { key, body: { title: '   ', dueDate: '2026-02-30' } });
+  assert.equal(both.status, 400);
+  assert.deepEqual(await both.json(), REQUIRED);
+  const bothCreate = await createDated(key, { title: '', dueDate: '2026-02-30' });
+  assert.equal(bothCreate.status, 400);
+  assert.deepEqual(await bothCreate.json(), REQUIRED);
+
+  const badUnknown = await call('PATCH', '/todos/does-not-exist', { key, body: { dueDate: '2026-02-30' } });
+  assert.equal(badUnknown.status, 400);
+  assert.deepEqual(await badUnknown.json(), BAD_DATE);
+  const goodUnknown = await call('PATCH', '/todos/does-not-exist', { key, body: { dueDate: '2026-12-31' } });
+  assert.equal(goodUnknown.status, 404);
+});
+
+test('due dates AT5: titles, done-only update, 404 and 401 behave as before', async () => {
+  const key = 'dd-at5';
+  const todo = await createDated(key, { title: '  trimmed  ', dueDate: '2026-12-31' }).then((r) => r.json());
+  assert.equal(todo.title, 'trimmed');
+  const tooLong = await createDated(key, { title: 'a'.repeat(201), dueDate: '2026-12-31' });
+  assert.deepEqual(await tooLong.json(), TOO_LONG);
+
+  const doneOnly = await call('PATCH', `/todos/${todo.id}`, { key, body: { done: true } });
+  assert.equal(doneOnly.status, 200);
+  assert.equal((await doneOnly.json()).done, true);
+  assert.equal((await call('PATCH', '/todos/does-not-exist', { key, body: { done: true } })).status, 404);
+  assert.equal((await call('GET', '/todos/does-not-exist', { key })).status, 404);
+  assert.equal((await fetch(base + '/todos', { method: 'POST', body: '{}' })).status, 401);
+  assert.equal((await fetch(base + `/todos/${todo.id}`, { method: 'PATCH', body: '{}' })).status, 401);
+});
+
+test('due dates AT5: another tenant cannot read, set or clear the dueDate of a todo it does not own', async () => {
+  const todo = await (await createDated('dd-owner', { title: 'secret', dueDate: '2026-12-31' })).json();
+  const intruder = 'dd-intruder';
+  assert.equal((await call('GET', `/todos/${todo.id}`, { key: intruder })).status, 404);
+  const set = await call('PATCH', `/todos/${todo.id}`, { key: intruder, body: { dueDate: '2030-01-01' } });
+  assert.equal(set.status, 404);
+  const clear = await call('PATCH', `/todos/${todo.id}`, { key: intruder, body: { dueDate: null } });
+  assert.equal(clear.status, 404);
+  assert.deepEqual(await listAll(intruder), []);
+  assert.equal((await fetchTodo('dd-owner', todo.id)).dueDate, '2026-12-31');
+});

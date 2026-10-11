@@ -7,8 +7,10 @@ const bucket = (tenant) => {
   return tenants.get(tenant);
 };
 
-export function createTodo(tenant, { title }) {
-  const todo = Object.freeze({ id: String(nextId++), title, done: false, createdAt: new Date().toISOString() });
+// A todo has a `dueDate` key only when it has a date; callers pass values from normalizeDueDate.
+export function createTodo(tenant, { title, dueDate }) {
+  const base = { id: String(nextId++), title, done: false, createdAt: new Date().toISOString() };
+  const todo = Object.freeze(typeof dueDate === 'string' ? { ...base, dueDate } : base);
   bucket(tenant).set(todo.id, todo);
   return todo;
 }
@@ -24,7 +26,9 @@ export function getTodo(tenant, id) {
 export function updateTodo(tenant, id, patch) {
   const current = getTodo(tenant, id);
   if (!current) return null;
-  const next = Object.freeze({ ...current, ...patch });
+  // `dueDate: null` clears the date: build a new value without the key (frozen values cannot be deleted from).
+  const { dueDate, ...merged } = { ...current, ...patch };
+  const next = Object.freeze(typeof dueDate === 'string' ? { ...merged, dueDate } : merged);
   bucket(tenant).set(id, next);
   return next;
 }
